@@ -2,22 +2,45 @@ en:
   configuration:
     git_url:
       name: Source repository URL
-      description: Git URL of the camofox-browser repository to clone and run.
+      description: >-
+        Git repository to clone and run. Default: the official jo-inc/camofox-browser
+        repository. Change this only if you are running a fork.
     git_ref:
-      name: Git ref (branch/tag/commit)
-      description: Branch, tag, or commit SHA to check out. Leave blank for the default branch.
+      name: Git ref (branch / tag / commit)
+      description: >-
+        Which branch, tag, or commit SHA to check out. Leave blank to use the
+        repository's default branch (usually 'master'). Example: 'v1.11.2' to
+        pin to a specific release.
     git_cred:
       name: Git credential
-      description: Credential (token or password) for authenticating to a private repository.
+      description: >-
+        Personal access token or password for cloning a private repository.
+        Leave blank for the default public repository. The value is passed as
+        the HTTP Basic Auth password in the clone URL.
     auto_update:
       name: Auto-update on restart
-      description: If enabled, the add-on will pull the latest source from the configured branch on every restart.
+      description: >-
+        When enabled, the add-on runs 'git pull' on every restart and
+        re-installs npm packages if the source version changed. Useful for
+        tracking the latest upstream commits without manual intervention.
+        Disable for stable production use.
     api_port:
       name: Internal API port
-      description: The port the Camofox Node.js server listens on internally. nginx proxies HA ingress to this port.
+      description: >-
+        The TCP port the Camofox Node.js server listens on inside the container.
+        This is the port your AI agents connect to. The value 9377 matches the
+        upstream default and should only be changed if it conflicts with another
+        add-on.
     api_cred:
       name: API key (CAMOFOX_API_KEY)
-      description: Optional API key to secure the Camofox REST API. Passed as the CAMOFOX_API_KEY environment variable.
+      description: >-
+        Optional secret to authenticate requests to the Camofox REST API. When
+        set, clients must send this value in the 'x-api-key' header. Leave blank
+        to allow unauthenticated access (only do this on a trusted local network).
     max_memory:
-      name: Node.js max memory (MB)
-      description: Maximum heap size for the Node.js process (--max-old-space-size). Increase if you see out-of-memory errors with many concurrent tabs.
+      name: Node.js max heap (MB)
+      description: >-
+        Maximum heap size for the Node.js process in megabytes
+        (--max-old-space-size). The default of 128 MB is sufficient for a few
+        concurrent tabs. Increase to 256–512 MB if you see 'JavaScript heap out
+        of memory' errors when running many tabs in parallel.

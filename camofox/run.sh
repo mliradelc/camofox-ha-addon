@@ -39,7 +39,21 @@ mkdir -p \
 # causes 'ln: cannot overwrite directory'.
 export HOME="$CAMOFOX_HOME"
 
-log "Architecture: $(uname -m)"
+# ── Architecture detection ─────────────────────────────────────────────────────
+UNAME_ARCH="$(uname -m)"
+case "$UNAME_ARCH" in
+    x86_64)
+        YTDLP_SUFFIX=""
+        ;;
+    aarch64|arm64)
+        YTDLP_SUFFIX="_aarch64"
+        ;;
+    *)
+        log "WARNING: Unknown architecture $UNAME_ARCH — yt-dlp download may fail"
+        YTDLP_SUFFIX=""
+        ;;
+esac
+log "Architecture: $UNAME_ARCH"
 
 # ── Clone / update source ──────────────────────────────────────────────────────
 SRC="$CAMOFOX_HOME/source"
@@ -70,9 +84,11 @@ fi
 
 # ── npm install (marker-gated) ─────────────────────────────────────────────────
 # npm postinstall (scripts/postinstall.js) automatically downloads the Camoufox
-# binary (~700 MB) and yt-dlp into $HOME/.cache/camoufox/ and $HOME/.cache/ytdlp/.
-# With HOME=$CAMOFOX_HOME these land in persistent /config/camofox/ storage.
-# Do NOT manually download or symlink the binary — postinstall handles it.
+# binary (~700 MB) into $HOME/.cache/camoufox/. With HOME=$CAMOFOX_HOME these
+# land in persistent /config/camofox/ storage. Do NOT manually download or
+# symlink the binary — postinstall handles it and creates a real directory there.
+#
+# NOTE: yt-dlp is NOT downloaded by postinstall — it is installed separately below.
 cd "$SRC"
 CURRENT_HEAD="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
 NPM_VER="$(jq -r '.version' package.json)"
@@ -89,6 +105,21 @@ else
     log "npm install up-to-date (marker matches). Skipping."
 fi
 
+# ── yt-dlp binary ─────────────────────────────────────────────────────────────
+# yt-dlp is provided by the upstream youtube plugin's post-install.sh, which
+# runs only during a Docker build (not during runtime npm install). We download
+# it once to persistent storage and symlink to /usr/local/bin/ on every boot.
+YTDLP_DEST="$CAMOFOX_HOME/yt-dlp"
+if [ ! -f "$YTDLP_DEST" ]; then
+    log "Downloading yt-dlp (YouTube transcript support)..."
+    YTDLP_URL="https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp_linux${YTDLP_SUFFIX}"
+    curl -fSL "$YTDLP_URL" -o "$YTDLP_DEST" && chmod 755 "$YTDLP_DEST" \
+        && log "yt-dlp installed." \
+        || log "WARNING: yt-dlp download failed. YouTube transcripts will use browser fallback."
+fi
+# Symlink to /usr/local/bin/ so the server finds it on PATH (ephemeral — recreated each boot)
+ln -sfn "$YTDLP_DEST" /usr/local/bin/yt-dlp 2>/dev/null || true
+
 # ── Xvfb virtual display ───────────────────────────────────────────────────────
 log "Starting Xvfb virtual display on :99..."
 Xvfb :99 -screen 0 1920x1080x24 -nolisten tcp >"$CAMOFOX_HOME/logs/xvfb.log" 2>&1 &
@@ -101,37 +132,15 @@ else
     log "WARNING: Xvfb failed to start. Browser tabs may not work correctly."
 fi
 
-# ── nginx ingress proxy ────────────────────────────────────────────────────────
-log "Configuring nginx ingress proxy..."
-INGRESS_PORT="${HASSIO_INGRESS_PORT:-49171}"
-
-cat > /etc/nginx/sites-available/camofox <<NGINXCONF
-server {
-    listen ${INGRESS_PORT};
-    location / {
-        proxy_pass http://127.0.0.1:${API_PORT};
-        proxy_http_version 1.1;
-        proxy_set_header Upgrade \$http_upgrade;
-        proxy_set_header Connection "upgrade";
-        proxy_set_header Host \$host;
-        proxy_set_header X-Real-IP \$remote_addr;
-        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
-        proxy_read_timeout 300s;
-        proxy_send_timeout 300s;
-        client_max_body_size 50M;
-    }
-}
-NGINXCONF
-
-rm -f /etc/nginx/sites-enabled/default
-ln -sf /etc/nginx/sites-available/camofox /etc/nginx/sites-enabled/camofox
-nginx -t 2>&1 && nginx
-
-log "nginx ingress proxy running on port ${INGRESS_PORT} → 127.0.0.1:${API_PORT}"
+# ── nginx removed ─────────────────────────────────────────────────────────────
+# ingress: false — Camofox has no web UI, so HA sidebar integration is disabled.
+# The REST API is exposed directly on the external port (9378 → 9377 internal).
+# nginx is not required; Node.js binds directly on $API_PORT.
 
 # ── Launch Node.js server ──────────────────────────────────────────────────────
 cd "$SRC"
 log "Starting Camofox Browser server on port ${API_PORT} (max-old-space-size=${MAX_MEM}MB)..."
+log "API available at http://homeassistant:${API_PORT}"
 
 export NODE_ENV=production
 export CAMOFOX_PORT="${API_PORT}"
@@ -139,9 +148,8 @@ export MAX_OLD_SPACE_SIZE="${MAX_MEM}"
 export DISPLAY=:99
 export HOME="$CAMOFOX_HOME"
 
-# Pass CAMOFOX_API_KEY via env(1) argument string — avoids the secret-redactor
+# Pass CAMOFOX_API_KEY via env(1) positional argument — avoids the secret-redactor
 # which pattern-matches shell variable assignments ending in _KEY/_TOKEN/_SECRET.
-# Passing it as a positional arg to env() is not an assignment and is not mangled.
 if [ -n "$API_CRED" ]; then
     exec env "CAMOFOX_API_KEY=${API_CRED}" \
         node --max-old-space-size="${MAX_MEM}" server.js

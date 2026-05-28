@@ -1,3 +1,9 @@
+## 1.0.3 (2026-05-28)
+
+- Fix yt-dlp warning: binary now downloaded to persistent storage at boot
+- Remove HA ingress / blank web UI button
+- Add full option descriptions to add-on configuration UI
+
 ## 1.0.2 (2026-05-28)
 
 - Fix: redundant binary download block removed; npm postinstall handles all binary fetching

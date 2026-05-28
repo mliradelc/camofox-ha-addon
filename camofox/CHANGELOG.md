@@ -1,3 +1,10 @@
+## 1.0.3 (2026-05-28)
+
+- Fix: download yt-dlp binary to persistent storage at boot — upstream postinstall.js does not download it; the youtube plugin post-install.sh does (runs only during Docker build, not at runtime). Binary stored in /config/camofox/yt-dlp, symlinked to /usr/local/bin/ each boot.
+- Improvement: remove HA ingress panel and "Open Web UI" button — Camofox has no web UI; the blank page it produced was confusing. REST API is now exposed directly on port 9378.
+- Improvement: remove nginx proxy (was only serving the ingress endpoint which is now disabled).
+- Improvement: add descriptive tooltips for all configuration options in the HA add-on UI.
+
 ## 1.0.2 (2026-05-28)
 
 - Fix: remove manual Camoufox binary download block — npm postinstall already handles this (downloading ~700 MB binary + yt-dlp + GeoIP database to $HOME/.cache/camoufox/)
