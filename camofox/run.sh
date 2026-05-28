@@ -84,7 +84,7 @@ fi
 # ── npm install (marker-gated) ─────────────────────────────────────────────────
 cd "$SRC"
 CURRENT_HEAD="$(git rev-parse HEAD 2>/dev/null || echo unknown)"
-NPM_VER="$(python3 -c "import json; print(json.load(open('package.json'))['version'])")"
+NPM_VER="$(jq -r '.version' package.json)"
 INSTALL_MARKER="$CAMOFOX_HOME/.install-marker"
 MARKER_VALUE="${GIT_URL}|${GIT_REF:-HEAD}|${CURRENT_HEAD}|${NPM_VER}"
 

@@ -1,3 +1,8 @@
+## 1.0.1 (2026-05-28)
+
+- Fix: replace `python3 -c 'import json'` with `jq` — `python3-minimal` in node:22-slim does not ship the json stdlib module
+
+
 ## 1.0.0 (2026-05-28)
 
 ### Initial release
