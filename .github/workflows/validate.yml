@@ -1,0 +1,101 @@
+name: Validate add-on image
+
+on:
+  # Run after a successful release build — NO branches filter (release builds run on
+  # tag refs, not main; a branches filter silently blocks all tag-triggered runs)
+  workflow_run:
+    workflows: ["Build and publish add-on image"]
+    types: [completed]
+
+  # Static checks (YAML parse, shell syntax) still run on PRs without needing Docker
+  pull_request:
+    paths:
+      - 'camofox/Dockerfile'
+      - 'camofox/run.sh'
+      - 'camofox/config.yaml'
+
+  workflow_dispatch:
+
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    permissions:
+      packages: read
+
+    # Only run Docker checks when the upstream build succeeded
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate config.yaml syntax
+        run: |
+          python3 -c "import yaml; yaml.safe_load(open('camofox/config.yaml'))"
+          echo "config.yaml: syntax OK"
+
+      - name: Validate run.sh syntax
+        run: |
+          bash -n camofox/run.sh
+          echo "run.sh: syntax OK"
+
+      - name: Log in to GHCR
+        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
+        id: version
+        run: |
+          VERSION=$(grep '^version:' camofox/config.yaml \
+            | sed "s/version: *['\"]//;s/['\"].*//")
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Testing image version: ${VERSION}"
+
+      - name: Check required binaries are present in image
+        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
+        run: |
+          docker run --rm \
+            --entrypoint bash \
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }} \
+            -c '
+              set -e
+              echo "=== Binary checks ==="
+              for cmd in node npm nginx xvfb-run curl git jq python3 unzip; do
+                path=$(command -v "$cmd" 2>/dev/null || true)
+                if [ -z "$path" ]; then
+                  echo "FAIL: $cmd not found on PATH"
+                  exit 1
+                fi
+                echo "  OK: $cmd -> $path"
+              done
+              echo "=== Node version ==="
+              node --version
+              echo "=== npm version ==="
+              npm --version
+              echo "All binary checks passed."
+            '
+
+      - name: Verify Xvfb starts successfully
+        if: github.event_name == 'workflow_run' || github.event_name == 'workflow_dispatch'
+        run: |
+          docker run --rm \
+            --entrypoint bash \
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }} \
+            -c '
+              set -e
+              Xvfb :99 -screen 0 1280x720x24 -nolisten tcp &
+              XPID=$!
+              sleep 2
+              if kill -0 $XPID 2>/dev/null; then
+                echo "OK: Xvfb started (PID $XPID)"
+                kill $XPID
+              else
+                echo "FAIL: Xvfb did not start"
+                exit 1
+              fi
+            '

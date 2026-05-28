@@ -1,0 +1,11 @@
+version: 2
+updates:
+  # Track node:22-slim base image updates
+  - package-ecosystem: docker
+    directory: /camofox
+    schedule:
+      interval: weekly
+      day: monday
+    labels:
+      - dependencies
+      - docker

@@ -1,0 +1,98 @@
+name: Watch upstream for updates
+
+on:
+  schedule:
+    # Every Monday at 06:00 UTC
+    - cron: '0 6 * * 1'
+  workflow_dispatch:
+
+jobs:
+  check-upstream:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      pull-requests: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Check upstream versions
+        id: versions
+        run: |
+          # Current pinned versions
+          CURRENT_CFB=$(jq -r '.camofox_browser' camofox/.upstream-versions.json)
+          CURRENT_BIN=$(jq -r '.camoufox_binary' camofox/.upstream-versions.json)
+          echo "Current camofox-browser: $CURRENT_CFB"
+          echo "Current camoufox-binary: $CURRENT_BIN"
+
+          # Latest camofox-browser release
+          LATEST_CFB=$(curl -sf \
+            -H "Authorization: token ${{ secrets.GITHUB_TOKEN }}" \
+            https://api.github.com/repos/jo-inc/camofox-browser/releases/latest \
+            | jq -r '.tag_name')
+          LATEST_CFB="${LATEST_CFB#v}"
+
+          # Latest daijro/camoufox release (includes betas — they use beta tags for current stable)
+          LATEST_BIN=$(curl -sf \
+            https://api.github.com/repos/daijro/camoufox/releases \
+            | jq -r '[.[].tag_name][0]')
+          LATEST_BIN="${LATEST_BIN#v}"
+
+          echo "Latest camofox-browser: $LATEST_CFB"
+          echo "Latest camoufox-binary: $LATEST_BIN"
+
+          echo "current_cfb=$CURRENT_CFB" >> $GITHUB_OUTPUT
+          echo "current_bin=$CURRENT_BIN" >> $GITHUB_OUTPUT
+          echo "latest_cfb=$LATEST_CFB" >> $GITHUB_OUTPUT
+          echo "latest_bin=$LATEST_BIN" >> $GITHUB_OUTPUT
+
+          if [ "$CURRENT_CFB" != "$LATEST_CFB" ] || [ "$CURRENT_BIN" != "$LATEST_BIN" ]; then
+            echo "drift=true" >> $GITHUB_OUTPUT
+          else
+            echo "drift=false" >> $GITHUB_OUTPUT
+            echo "All versions up to date."
+          fi
+
+      - name: Bump version and open PR
+        if: steps.versions.outputs.drift == 'true'
+        env:
+          LATEST_CFB: ${{ steps.versions.outputs.latest_cfb }}
+          LATEST_BIN: ${{ steps.versions.outputs.latest_bin }}
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          BRANCH="chore/bump-$(date +%Y%m%d)"
+          git checkout -b "$BRANCH"
+
+          # Bump semver patch in config.yaml
+          CURRENT_VER=$(grep '^version:' camofox/config.yaml | sed "s/version: *['\"]//;s/['\"].*//")
+          PATCH=$(echo "$CURRENT_VER" | cut -d. -f3)
+          NEW_PATCH=$((PATCH + 1))
+          NEW_VER="$(echo "$CURRENT_VER" | cut -d. -f1-2).${NEW_PATCH}"
+          sed -i "s/^version: .*/version: \"${NEW_VER}\"/" camofox/config.yaml
+
+          # Update .upstream-versions.json
+          jq --arg cfb "$LATEST_CFB" --arg bin "$LATEST_BIN" \
+            '.camofox_browser = $cfb | .camoufox_binary = $bin' \
+            camofox/.upstream-versions.json > /tmp/uv.json
+          mv /tmp/uv.json camofox/.upstream-versions.json
+
+          # Append to CHANGELOG
+          DATE=$(date +%Y-%m-%d)
+          ENTRY="## ${NEW_VER} (${DATE})\n\n- Bump camofox-browser to v${LATEST_CFB}\n- Bump camoufox binary to v${LATEST_BIN}\n\n"
+          { echo -e "$ENTRY"; cat camofox/CHANGELOG.md; } > /tmp/cl.md
+          mv /tmp/cl.md camofox/CHANGELOG.md
+
+          git add camofox/config.yaml camofox/.upstream-versions.json camofox/CHANGELOG.md
+          git commit -m "chore: bump camofox-browser=${LATEST_CFB} camoufox-binary=${LATEST_BIN}"
+          git push origin "$BRANCH"
+
+          gh pr create \
+            --title "chore: bump camofox-browser=${LATEST_CFB} camoufox-binary=${LATEST_BIN}" \
+            --body "Automated upstream version bump.\n\n- camofox-browser: \`${{ steps.versions.outputs.current_cfb }}\` → \`${LATEST_CFB}\`\n- camoufox binary: \`${{ steps.versions.outputs.current_bin }}\` → \`${LATEST_BIN}\`\n\nPlease review and merge to trigger a new release." \
+            --label "auto-bump" \
+            --base main \
+            --head "$BRANCH"

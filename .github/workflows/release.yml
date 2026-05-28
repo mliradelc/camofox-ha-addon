@@ -1,0 +1,134 @@
+name: Build and publish add-on image
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version to build (e.g. 1.0.0)'
+        required: true
+        default: '1.0.0'
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build-and-push:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, aarch64]
+        include:
+          - arch: amd64
+            platform: linux/amd64
+          - arch: aarch64
+            platform: linux/arm64
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${{ github.event.release.tag_name || inputs.version }}"
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+          echo "Building version: ${VERSION}"
+
+      - name: Build and push per-arch image
+        uses: docker/build-push-action@v6
+        with:
+          context: ./camofox
+          file: ./camofox/Dockerfile
+          push: true
+          platforms: ${{ matrix.platform }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.version.outputs.version }}-${{ matrix.arch }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ matrix.arch }}
+          # CRITICAL: provenance=false to push raw single-arch manifests (not manifest lists).
+          # The create-manifest job uses --format '{{.Manifest.Digest}}' which works for both,
+          # but if provenance=true buildx pushes a manifest list and docker manifest create
+          # will refuse to nest a manifest list inside another manifest list.
+          provenance: false
+          sbom: false
+
+  create-manifest:
+    needs: build-and-push
+    runs-on: ubuntu-latest
+    permissions:
+      packages: write
+
+    steps:
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract version
+        id: version
+        run: |
+          VERSION="${{ github.event.release.tag_name || inputs.version }}"
+          VERSION="${VERSION#v}"
+          echo "version=${VERSION}" >> $GITHUB_OUTPUT
+
+      - name: Create and push multi-arch manifest
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          IMAGE="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}"
+
+          # Use --format '{{.Manifest.Digest}}' — works for both single OCI manifests
+          # (provenance=false) and manifest lists. The {{json .}}.manifests[] approach
+          # returns empty for single manifests and causes @unknown → invalid reference.
+          AMD64_DIGEST=$(docker buildx imagetools inspect \
+            "${IMAGE}:${VERSION}-amd64" \
+            --format '{{.Manifest.Digest}}')
+
+          AARCH64_DIGEST=$(docker buildx imagetools inspect \
+            "${IMAGE}:${VERSION}-aarch64" \
+            --format '{{.Manifest.Digest}}')
+
+          echo "AMD64 digest:   $AMD64_DIGEST"
+          echo "AARCH64 digest: $AARCH64_DIGEST"
+
+          # Validate — fail loudly rather than pass garbage digests downstream
+          if [[ "$AMD64_DIGEST" != sha256:* ]] || [[ "$AARCH64_DIGEST" != sha256:* ]]; then
+            echo "ERROR: Unexpected digest format — aborting manifest creation"
+            exit 1
+          fi
+
+          # Version-tagged manifest
+          docker manifest create "${IMAGE}:${VERSION}" \
+            "${IMAGE}@${AMD64_DIGEST}" \
+            "${IMAGE}@${AARCH64_DIGEST}"
+          docker manifest push "${IMAGE}:${VERSION}"
+
+          # latest manifest
+          docker manifest create "${IMAGE}:latest" \
+            "${IMAGE}@${AMD64_DIGEST}" \
+            "${IMAGE}@${AARCH64_DIGEST}"
+          docker manifest push "${IMAGE}:latest"
+
+          echo "Multi-arch manifests pushed: ${IMAGE}:${VERSION} and ${IMAGE}:latest"

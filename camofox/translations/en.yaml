@@ -1,0 +1,23 @@
+en:
+  configuration:
+    git_url:
+      name: Source repository URL
+      description: Git URL of the camofox-browser repository to clone and run.
+    git_ref:
+      name: Git ref (branch/tag/commit)
+      description: Branch, tag, or commit SHA to check out. Leave blank for the default branch.
+    git_cred:
+      name: Git credential
+      description: Credential (token or password) for authenticating to a private repository.
+    auto_update:
+      name: Auto-update on restart
+      description: If enabled, the add-on will pull the latest source from the configured branch on every restart.
+    api_port:
+      name: Internal API port
+      description: The port the Camofox Node.js server listens on internally. nginx proxies HA ingress to this port.
+    api_cred:
+      name: API key (CAMOFOX_API_KEY)
+      description: Optional API key to secure the Camofox REST API. Passed as the CAMOFOX_API_KEY environment variable.
+    max_memory:
+      name: Node.js max memory (MB)
+      description: Maximum heap size for the Node.js process (--max-old-space-size). Increase if you see out-of-memory errors with many concurrent tabs.
