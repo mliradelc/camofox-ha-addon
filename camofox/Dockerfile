@@ -1,4 +1,4 @@
-FROM node:22-slim
+FROM node:26-slim
 
 LABEL \
     io.hass.version="1.0.0" \
