@@ -1,3 +1,7 @@
+## 1.0.4 (2026-05-28)
+
+- Fix: port mapping corrected from `9378/tcp: 9378` to `9377/tcp: 9378` — HA Supervisor maps the internal container port (9377, where Node.js actually listens) to external port 9378. The previous mapping targeted the wrong container port, causing connection resets on `homeassistant:9378`.
+
 ## 1.0.3 (2026-05-28)
 
 - Fix: download yt-dlp binary to persistent storage at boot — upstream postinstall.js does not download it; the youtube plugin post-install.sh does (runs only during Docker build, not at runtime). Binary stored in /config/camofox/yt-dlp, symlinked to /usr/local/bin/ each boot.

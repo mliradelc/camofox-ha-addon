@@ -1,5 +1,5 @@
 name: "Camofox Browser"
-version: "1.0.3"
+version: "1.0.4"
 slug: camofox
 description: "Anti-detect headless browser REST API for AI agents — powered by Camoufox (Firefox fork with C++-level fingerprint spoofing). Exposes a JSON REST API; there is no web UI."
 url: "https://github.com/mliradelc/camofox-ha-addon"
@@ -13,9 +13,9 @@ ingress: false
 map:
   - addon_config:rw
 ports:
-  9378/tcp: 9378
+  9377/tcp: 9378
 ports_description:
-  9378/tcp: "Camofox REST API — the primary endpoint for AI agents (POST /tabs, GET /tabs/:id/snapshot, etc.)"
+  9377/tcp: "Camofox REST API — the primary endpoint for AI agents (POST /tabs, GET /tabs/:id/snapshot, etc.)"
 image: ghcr.io/mliradelc/camofox-ha-addon
 options:
   git_url: "https://github.com/jo-inc/camofox-browser.git"

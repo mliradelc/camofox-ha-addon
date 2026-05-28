@@ -1,3 +1,7 @@
+## 1.0.4 (2026-05-28)
+
+- Fix port mapping: internal 9377 → external 9378
+
 ## 1.0.3 (2026-05-28)
 
 - Fix yt-dlp warning: binary now downloaded to persistent storage at boot
