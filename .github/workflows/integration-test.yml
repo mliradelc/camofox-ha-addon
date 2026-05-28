@@ -1,0 +1,269 @@
+name: Integration test
+
+on:
+  # Run after every successful release build — NO branches filter; release builds
+  # run on tag refs not on main, so a branches filter silently drops them.
+  workflow_run:
+    workflows: ["Build and publish add-on image"]
+    types: [completed]
+
+  # Allow manual trigger (e.g. to re-run against latest published image)
+  workflow_dispatch:
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      packages: read
+
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # ── Version metadata ───────────────────────────────────────────────────────
+      - name: Extract version and upstream pins
+        id: meta
+        run: |
+          VERSION=$(grep '^version:' camofox/config.yaml \
+            | sed "s/version: *['\"]//;s/['\"].*//")
+          BIN_VER=$(jq -r '.camoufox_binary' camofox/.upstream-versions.json)
+          echo "version=${VERSION}"  >> $GITHUB_OUTPUT
+          echo "bin_ver=${BIN_VER}"  >> $GITHUB_OUTPUT
+          echo "Image  : ghcr.io/${{ github.repository }}:${VERSION}"
+          echo "BinVer : ${BIN_VER}"
+
+      # ── Binary cache ───────────────────────────────────────────────────────────
+      # npm postinstall downloads ~700 MB of Camoufox binary + GeoIP into
+      # $HOME/.cache/camoufox/.  We persist that path between CI runs so the
+      # download only happens once per binary version.
+      - name: Restore Camoufox binary cache
+        id: cache
+        uses: actions/cache@v4
+        with:
+          path: /tmp/ci-camofox-home/.cache
+          key: camoufox-${{ steps.meta.outputs.bin_ver }}-amd64
+
+      # ── Test fixtures ──────────────────────────────────────────────────────────
+      - name: Prepare test fixtures
+        run: |
+          mkdir -p /tmp/ci-camofox-home/logs
+
+          # Fake HA options.json — mirrors the add-on defaults
+          cat > /tmp/ci-options.json << 'OPTEOF'
+          {
+            "git_url": "https://github.com/jo-inc/camofox-browser.git",
+            "git_ref": "",
+            "git_cred": "",
+            "auto_update": false,
+            "api_port": 9377,
+            "api_cred": "",
+            "max_memory": 128
+          }
+          OPTEOF
+
+          echo "Fixtures ready."
+          echo "Binary cache hit: ${{ steps.cache.outputs.cache-hit }}"
+
+      # ── Boot test ──────────────────────────────────────────────────────────────
+      - name: Start add-on container (detached)
+        run: |
+          docker run -d --name camofox-test \
+            -v /tmp/ci-camofox-home:/config/camofox \
+            -v /tmp/ci-options.json:/data/options.json:ro \
+            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }}
+          echo "Container: $(docker ps -q --filter name=camofox-test)"
+
+      - name: Wait for server ready — poll /openapi.json (8 min max)
+        # Readiness timeline (uncached): clone ~5s, npm+postinstall ~3min, server start ~10s
+        # Readiness timeline (cached):   clone ~5s, npm ~30s, server start ~10s
+        run: |
+          echo "Polling http://localhost:9377/openapi.json ..."
+          for i in $(seq 1 96); do
+            if docker exec camofox-test \
+                curl -sf http://localhost:9377/openapi.json -o /dev/null 2>/dev/null; then
+              echo ""
+              echo "Server ready after $((i * 5))s"
+              exit 0
+            fi
+            [ $i -eq 96 ] && {
+              echo ""
+              echo "TIMEOUT: server did not become ready within 8 minutes"
+              echo "=== Container logs ==="
+              docker logs camofox-test
+              exit 1
+            }
+            printf "  [%02d/96] not ready, retry in 5s...\r" "$i"
+            sleep 5
+          done
+
+      # ── Artefact checks ────────────────────────────────────────────────────────
+      - name: Verify npm install marker was written
+        run: |
+          MARKER=/tmp/ci-camofox-home/.install-marker
+          if [ ! -f "$MARKER" ]; then
+            echo "FAIL: .install-marker not found in persistent volume"
+            exit 1
+          fi
+          echo "OK: marker = $(cat "$MARKER" | cut -c1-80)..."
+
+      - name: Verify Camoufox binary cache directory created by postinstall
+        # npm postinstall (scripts/postinstall.js) downloads the binary into
+        # $HOME/.cache/camoufox/ as a real directory.  We must NOT symlink or
+        # manually create this path — that breaks on the second run.
+        run: |
+          CACHE=/tmp/ci-camofox-home/.cache/camoufox
+          if [ ! -d "$CACHE" ]; then
+            echo "FAIL: Camoufox binary cache missing at $CACHE"
+            ls -la /tmp/ci-camofox-home/ || true
+            exit 1
+          fi
+          echo "OK: $CACHE exists"
+          ls "$CACHE/" | head -10
+
+          # Must be a real directory, NOT a symlink (symlink from our old code
+          # would break on second run with "ln: cannot overwrite directory")
+          if [ -L "$CACHE" ]; then
+            echo "FAIL: cache path is a symlink — must be a real directory"
+            exit 1
+          fi
+          echo "OK: cache path is a real directory (not a symlink)"
+
+      # ── Live API tests ─────────────────────────────────────────────────────────
+      - name: API — GET /openapi.json (schema check)
+        run: |
+          RESP=$(docker exec camofox-test \
+            curl -sf http://localhost:9377/openapi.json)
+          TITLE=$(echo "$RESP" | jq -r '.info.title // "unknown"')
+          VERSION=$(echo "$RESP" | jq -r '.info.version // "unknown"')
+          echo "OK: OpenAPI spec — title='$TITLE' version='$VERSION'"
+
+      - name: API — POST /tabs (create tab to https://example.com)
+        id: tab
+        run: |
+          RESP=$(docker exec camofox-test \
+            curl -sf -X POST http://localhost:9377/tabs \
+              -H 'Content-Type: application/json' \
+              -d '{"userId":"ci","sessionKey":"s1","url":"https://example.com"}')
+          echo "Response: $RESP"
+
+          # Accept multiple possible field names for tab id across server versions
+          TAB_ID=$(echo "$RESP" | jq -r '.id // .tabId // .tab_id // empty' 2>/dev/null || true)
+          if [ -z "$TAB_ID" ]; then
+            echo "FAIL: tab id not found in response"
+            exit 1
+          fi
+          echo "OK: tab created — id=$TAB_ID"
+          echo "tab_id=$TAB_ID" >> $GITHUB_OUTPUT
+
+      - name: Wait for page load (Firefox navigates to example.com)
+        # Camoufox launches the Firefox process on the first tab request.
+        # Allow time for the browser to start and complete initial navigation.
+        run: sleep 8
+
+      - name: API — GET /tabs/:id/snapshot (accessibility tree)
+        run: |
+          TAB_ID="${{ steps.tab.outputs.tab_id }}"
+          RESP=$(docker exec camofox-test \
+            curl -sf "http://localhost:9377/tabs/${TAB_ID}/snapshot?userId=ci")
+          echo "Snapshot (first 300 chars): $(echo "$RESP" | head -c 300)"
+
+          # Snapshot should be non-empty for example.com
+          SNAPSHOT=$(echo "$RESP" | jq -r '.snapshot // empty' 2>/dev/null || true)
+          if [ -z "$SNAPSHOT" ]; then
+            echo "WARN: snapshot field empty — page may still be loading (non-fatal)"
+          else
+            echo "OK: snapshot received ($(echo "$SNAPSHOT" | wc -c) chars)"
+          fi
+
+      - name: API — DELETE /tabs/:id (cleanup)
+        run: |
+          TAB_ID="${{ steps.tab.outputs.tab_id }}"
+          docker exec camofox-test \
+            curl -sf -X DELETE \
+              "http://localhost:9377/tabs/${TAB_ID}?userId=ci" || true
+          echo "OK: tab closed"
+
+      # ── Marker gate test ───────────────────────────────────────────────────────
+      - name: Stop first container
+        run: |
+          docker stop camofox-test --time 10
+          docker rm camofox-test
+          echo "Container stopped."
+
+      - name: Verify marker gate — second boot must skip npm install
+        # Runs the image with --entrypoint bash on the same persistent volume.
+        # Reproduces the marker-check logic from run.sh and asserts that the
+        # stored marker matches the current source state.  A match means the
+        # real run.sh will skip npm install (and the 700 MB download) on restart.
+        run: |
+          docker run --rm --name camofox-marker-test \
+            -v /tmp/ci-camofox-home:/config/camofox \
+            -v /tmp/ci-options.json:/data/options.json:ro \
+            --entrypoint bash \
+            ghcr.io/${{ github.repository }}:${{ steps.meta.outputs.version }} \
+            -c '
+              set -euo pipefail
+              opt() { jq -r --arg k "$1" '"'"'.[$k] // empty'"'"' /data/options.json; }
+              GIT_URL="$(opt git_url)"
+              GIT_REF="$(opt git_ref)"
+              CAMOFOX_HOME=/config/camofox
+              export HOME="$CAMOFOX_HOME"
+              SRC="$CAMOFOX_HOME/source"
+
+              if [ ! -d "$SRC/.git" ]; then
+                echo "FAIL: source not present in persistent volume"
+                exit 1
+              fi
+
+              cd "$SRC"
+              HEAD="$(git rev-parse HEAD)"
+              NPM_VER="$(jq -r .version package.json)"
+              MARKER_FILE="$CAMOFOX_HOME/.install-marker"
+              EXPECTED="${GIT_URL}|${GIT_REF:-HEAD}|${HEAD}|${NPM_VER}"
+              ACTUAL="$(cat "$MARKER_FILE" 2>/dev/null || echo MISSING)"
+
+              echo "Expected marker: $EXPECTED"
+              echo "Actual   marker: $ACTUAL"
+
+              if [ "$ACTUAL" = "$EXPECTED" ]; then
+                echo "PASS: marker matches — npm install will be skipped on next boot"
+              else
+                echo "FAIL: marker mismatch — npm install would run again (re-download!)"
+                exit 1
+              fi
+            '
+
+      # ── Cache save ─────────────────────────────────────────────────────────────
+      - name: Save Camoufox binary cache
+        if: steps.cache.outputs.cache-hit != 'true' && success()
+        uses: actions/cache/save@v4
+        with:
+          path: /tmp/ci-camofox-home/.cache
+          key: camoufox-${{ steps.meta.outputs.bin_ver }}-amd64
+
+      # ── Failure diagnostics ────────────────────────────────────────────────────
+      - name: Dump logs on failure
+        if: failure()
+        run: |
+          echo "===== Container logs ====="
+          docker logs camofox-test 2>/dev/null || echo "(container not running)"
+          echo ""
+          echo "===== npm-install.log (last 60 lines) ====="
+          tail -60 /tmp/ci-camofox-home/logs/npm-install.log 2>/dev/null || echo "(not found)"
+          echo ""
+          echo "===== xvfb.log ====="
+          cat /tmp/ci-camofox-home/logs/xvfb.log 2>/dev/null || echo "(not found)"
+          echo ""
+          echo "===== Persistent volume contents ====="
+          ls -la /tmp/ci-camofox-home/ 2>/dev/null || true
+          ls -la /tmp/ci-camofox-home/.cache/ 2>/dev/null || true

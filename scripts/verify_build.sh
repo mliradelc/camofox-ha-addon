@@ -30,7 +30,7 @@ fi
 
 # 3. YAML validity
 echo "--- YAML validity ---"
-for f in camofox/config.yaml camofox/translations/en.yaml repository.yaml .github/workflows/release.yml .github/workflows/upstream-watch.yml .github/workflows/validate.yml .github/dependabot.yml; do
+for f in camofox/config.yaml camofox/translations/en.yaml repository.yaml .github/workflows/release.yml .github/workflows/upstream-watch.yml .github/workflows/validate.yml .github/workflows/integration-test.yml .github/dependabot.yml; do
     if [ -f "$f" ]; then
         if python3 -c "import yaml; yaml.safe_load(open('$f'))" 2>/dev/null; then
             ok "$f YAML valid"
@@ -74,6 +74,7 @@ for f in \
     .github/workflows/release.yml \
     .github/workflows/upstream-watch.yml \
     .github/workflows/validate.yml \
+    .github/workflows/integration-test.yml \
     .github/dependabot.yml; do
     if [ -f "$f" ]; then
         ok "$f present"
