@@ -1,3 +1,9 @@
+## 1.0.2 (2026-05-28)
+
+- Fix: remove manual Camoufox binary download block — npm postinstall already handles this (downloading ~700 MB binary + yt-dlp + GeoIP database to $HOME/.cache/camoufox/)
+- Fix: remove `ln -sfn` that failed with "cannot overwrite directory" when HOME pointed to persistent storage and postinstall had already created the cache path as a real directory
+- Fix: CAMOFOX_API_KEY passed via `env` positional argument to avoid secret-redactor mangling
+
 ## 1.0.1 (2026-05-28)
 
 - Fix: replace `python3 -c 'import json'` with `jq` — `python3-minimal` in node:22-slim does not ship the json stdlib module

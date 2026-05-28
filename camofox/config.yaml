@@ -1,5 +1,5 @@
 name: "Camofox Browser"
-version: "1.0.1"
+version: "1.0.2"
 slug: camofox
 description: "Anti-detect headless browser REST API for AI agents — powered by Camoufox (Firefox fork with C++-level fingerprint spoofing)"
 url: "https://github.com/mliradelc/camofox-ha-addon"

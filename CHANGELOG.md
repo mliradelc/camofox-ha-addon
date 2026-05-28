@@ -1,3 +1,8 @@
+## 1.0.2 (2026-05-28)
+
+- Fix: redundant binary download block removed; npm postinstall handles all binary fetching
+- Fix: ln symlink error on restart resolved
+
 ## 1.0.1 (2026-05-28)
 
 - Fix: jq instead of python3 for package.json version read
