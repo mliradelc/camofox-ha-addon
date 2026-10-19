@@ -1,3 +1,9 @@
+## 1.0.5 (2026-10-19)
+
+- Bump camofox-browser to vcamoufox-backup-404310733
+- Bump camoufox binary to v156.0.1-beta.39
+
+
 ## 1.0.4 (2026-05-28)
 
 - Fix: port mapping corrected from `9378/tcp: 9378` to `9377/tcp: 9378` — HA Supervisor maps the internal container port (9377, where Node.js actually listens) to external port 9378. The previous mapping targeted the wrong container port, causing connection resets on `homeassistant:9378`.
